@@ -2,9 +2,13 @@ package main
 
 import (
 	"bufio"
+	"container/list"
 	"flag"
 	"fmt"
 	"go-utils/random"
+	"io"
+	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"strconv"
@@ -32,6 +36,12 @@ const (
 const (
 	KBP = 10
 )
+const (
+	CREATE_DIR = iota
+	CREATE_FILE
+	COUNT_DIR
+	RANDOM_FILE_WRITE
+)
 
 const GOT = 2000
 
@@ -41,16 +51,21 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
-// -ms 100 -mx 200 -u kb -c 100 -p filePath
-
+// -o 1 -ms 100 -mx 200 -u kb -c 100 -p filePath
+// -o 0 -p dirPath -dc 20,20
+// -o 2 -p dirPath
+// -o 3 -p dirPath -r true -c 100
 func main() {
 	var (
-		ms int
-		mx int
-		u  int
-		c  int
-		p  string
-		t  int
+		ms             int
+		mx             int
+		u              int
+		c              int
+		p              string
+		t              int
+		o              int // 操作类型
+		recursive      bool
+		depthsCountVar string
 	)
 	flag.IntVar(&ms, "ms", 1, "file min size")
 	flag.IntVar(&mx, "mx", 1024, "file max size ")
@@ -58,21 +73,211 @@ func main() {
 	flag.IntVar(&c, "c", 1, "file count")
 	flag.IntVar(&t, "t", 0, "type")
 	flag.StringVar(&p, "p", "", "file path")
+	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE")
+	flag.BoolVar(&recursive, "r", false, "count of dir")
+	flag.StringVar(&depthsCountVar, "dc", "1", "file path")
+
 	flag.Parse()
-	fmt.Printf("file path:%s,minSize %v,maxSize %v\n", p, ms, mx)
 	if len([]rune(p)) == 0 {
-		panic("please type file path")
+		panic("please type  path")
 	}
-	if ms > mx {
-		panic("minSize greater than maxSize,please type correct size")
-	}
-	if t == 0 {
-		CreateFile(ms, mx, u, c, p)
-	} else {
-		CreateFile2(ms, mx, u, c, p)
+
+	switch o {
+	case CREATE_DIR:
+		splitS := strings.Split(depthsCountVar, ",")
+		depthsCount := make([]int, 0)
+		for i := 0; i < len(splitS); i++ {
+			val, err := strconv.Atoi(splitS[i])
+			if err != nil {
+				panic(err)
+			}
+			depthsCount = append(depthsCount, val)
+		}
+		fmt.Println("depths count val:", depthsCount)
+		err := CreateDir(p, depthsCount, true)
+		if err != nil {
+			panic(err)
+		}
+	case CREATE_FILE:
+		if ms > mx {
+			panic("minSize greater than maxSize,please type correct size")
+		}
+		fmt.Printf("file path:%s,minSize %v,maxSize %v\n", p, ms, mx)
+		if t == 0 {
+			CreateFile(ms, mx, u, c, p)
+		} else {
+			CreateFile2(ms, mx, u, c, p)
+		}
+	case COUNT_DIR:
+		count, err := CountOfDir(p, recursive)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("path : %s,dir count:%d\n", p, count)
+	case RANDOM_FILE_WRITE:
+		if c <= 0 {
+			panic("please type correct update file count")
+		}
+		RandomUpdateFilesOnDir(p, c, recursive)
+	default:
+		panic("not support")
 	}
 }
 
+//计算目录数目
+
+func CountOfDir(dir string, recursive bool) (int, error) {
+	_, dirs, err := filesOfDir(dir, recursive)
+	if err != nil {
+		return 0, err
+	}
+	return len(dirs), nil
+}
+
+// 返回该目录下的所有文件
+// dir:目录
+// recursive: 是否递归
+
+func ListFile(dir string, recursive bool) ([]string, error) {
+	if !IsDir(dir) {
+		return nil, fmt.Errorf("path:%s is not a dir", dir)
+	}
+
+	files, _, err := filesOfDir(dir, recursive)
+	if err != nil {
+		return nil, err
+	}
+	return files, err
+}
+
+// 目录下的所有文件任意修改
+
+func RandomUpdateFilesOnDir(dir string, updateCount int, recursive bool) error {
+
+	if !IsDir(dir) {
+		return fmt.Errorf("please type correct dir path, %s not exits", dir)
+	}
+
+	files, err := ListFile(dir, recursive)
+	if err != nil {
+		return err
+	}
+	lens := len(files)
+	if updateCount > lens {
+		updateCount = lens
+	}
+	log.Println("update file count is ", updateCount)
+	idx := random.RandomIntM(lens)
+	for ; updateCount > 0; updateCount-- {
+		err = RandomUpdateFile(files[idx%lens])
+		//just print
+		if err != nil {
+			fmt.Println(err)
+		}
+		idx++
+	}
+	return nil
+}
+
+func RandomUpdateFile(file string) error {
+	filePoint, err := os.OpenFile(file, os.O_RDWR, 0766)
+	if err != nil {
+		return err
+	}
+	defer filePoint.Close()
+	stat, err := os.Stat(file)
+	if err != nil {
+		return err
+	}
+	fileSize := stat.Size()
+	var seekPosition int64 = 0
+	if fileSize > 0 {
+		seekPosition = rand.Int63n(fileSize)
+	}
+	_, err = filePoint.Seek(seekPosition, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	// 随机写入1kb大小数据
+	writeDataSize := 1024 * 1
+	log.Printf("start write 1kb data to %s on seek %d \n", file, seekPosition)
+	dataStr := random.RandomStr(writeDataSize)
+	writer := bufio.NewWriter(filePoint)
+	writer.WriteString(dataStr)
+	writer.Flush()
+	return nil
+}
+
+// 创建目录
+// dir : 当前所在目录创建子目录
+// depthsCount: 每层数量
+// globalSeq : 是否全局有序
+// todo ignore error
+
+func CreateDir(dir string, depthsCount []int, globalSeq bool) error {
+	startTime := time.Now()
+	if !strings.HasSuffix(dir, string(Separator)) {
+		dir = dir + string(Separator)
+	}
+	if !IsDir(dir) {
+		fmt.Errorf("dir path:%s is not a dir", dir)
+	}
+
+	dirNameFunc := func(seq int) string {
+		suffixStr := "sub"
+		return suffixStr + "_" + strconv.Itoa(seq) + string(Separator)
+	}
+	// 暂时默认全局有序
+	stack := list.New()
+	stack.PushBack(dir)
+	suffixNumber := 1
+	for idx := 0; idx < len(depthsCount); idx++ {
+		// 第idx层
+		stackLen := stack.Len()
+		for i := 0; i < stackLen; i++ {
+			removeDir := stack.Remove(stack.Front()).(string)
+			for j := 0; j < depthsCount[idx]; j++ {
+				childDir := removeDir + dirNameFunc(suffixNumber)
+				os.Mkdir(childDir, os.ModePerm)
+				suffixNumber++
+				stack.PushBack(childDir)
+			}
+		}
+	}
+
+	fmt.Printf("create dir success,last suffixNumber is %d \n", suffixNumber-1)
+	fmt.Println(fmt.Sprintf("spend time %v s\n", time.Since(startTime).Seconds()))
+	return nil
+}
+
+func filesOfDir(dir string, recursive bool) ([]string, []string, error) {
+	if !strings.HasSuffix(dir, string(Separator)) {
+		dir = dir + string(Separator)
+	}
+	fileInfos, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	ans := make([]string, 0)
+	ansDir := make([]string, 0)
+	for idx := 0; idx < len(fileInfos); idx++ {
+		if fileInfos[idx].IsDir() {
+			ansDir = append(ansDir, dir+fileInfos[idx].Name())
+			if !recursive {
+				continue
+			}
+			tmpResFile, tmpResDir, err := filesOfDir(dir+fileInfos[idx].Name(), recursive)
+			if err != nil {
+				return nil, nil, err
+			}
+			ans = append(ans, tmpResFile...)
+			ansDir = append(ansDir, tmpResDir...)
+		} else {
+			ans = append(ans, dir+fileInfos[idx].Name())
+		}
+	}
+	return ans, ansDir, nil
+}
 func CreateFile(ms int, mx int, u int, c int, p string) {
 	var wg sync.WaitGroup
 	t := c / GOT
@@ -147,6 +352,14 @@ func GeneratorFileRangeSize(path string, minSize int, maxSize int, units int) er
 		return fmt.Errorf("not support")
 	}
 	return nil
+}
+
+func IsDir(dir string) bool {
+	f, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return f.IsDir()
 }
 
 func DirExits(path string) (bool, error) {
