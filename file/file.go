@@ -2,15 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"container/list"
+	"crypto/sha256"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	log "go-utils/log"
 	"go-utils/random"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,9 +45,12 @@ const (
 	CREATE_FILE
 	COUNT_DIR
 	RANDOM_FILE_WRITE
+	RANDOM_CREATE_FILE
+	HASH
+	COUNT_FILE
 )
 
-const GOT = 2000
+var GOT int = runtime.NumCPU() * 4
 
 var typeMap = map[int]int{KB: small, MB: medium, GB: big}
 
@@ -51,37 +58,45 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
-// -o 1 -ms 100 -mx 200 -u kb -c 100 -p filePath
+// -o 1 -ms 100 -mx 200 -u kb -c 100 -p dirPath
 // -o 0 -p dirPath -dc 20,20
 // -o 2 -p dirPath
 // -o 3 -p dirPath -r true -c 100
+// -o 4  -ms 100 -mx 200 -u kb -c 100 -p dirPath
+// -o 5 -p dirPath
+// -o 6 -p dirPath
 func main() {
 	var (
-		ms             int
-		mx             int
-		u              int
-		c              int
-		p              string
-		t              int
-		o              int // 操作类型
-		recursive      bool
-		depthsCountVar string
+		ms              int
+		mx              int
+		u               int
+		c               int
+		p               string
+		t               int
+		o               int // 操作类型
+		recursive       bool
+		depthsCountVar  string
+		logLevel        int  //  是否debug
+		forceConsitency bool // 完全一致性，会检查目录
 	)
+
 	flag.IntVar(&ms, "ms", 1, "file min size")
 	flag.IntVar(&mx, "mx", 1024, "file max size ")
 	flag.IntVar(&u, "u", KB, "file size units,0:kb 1:mb 2:gb please type 0-2 , default 0")
 	flag.IntVar(&c, "c", 1, "file count")
 	flag.IntVar(&t, "t", 0, "type")
 	flag.StringVar(&p, "p", "", "file path")
-	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE")
+	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE ")
 	flag.BoolVar(&recursive, "r", false, "count of dir")
 	flag.StringVar(&depthsCountVar, "dc", "1", "file path")
+	flag.IntVar(&logLevel, "l", 1, "log level")
+	flag.BoolVar(&forceConsitency, "fc", false, "true: check dir name and file content consistency flase: just check file content")
 
 	flag.Parse()
 	if len([]rune(p)) == 0 {
 		panic("please type  path")
 	}
-
+	log.SetLevel(logLevel)
 	switch o {
 	case CREATE_DIR:
 		splitS := strings.Split(depthsCountVar, ",")
@@ -103,11 +118,14 @@ func main() {
 			panic("minSize greater than maxSize,please type correct size")
 		}
 		fmt.Printf("file path:%s,minSize %v,maxSize %v\n", p, ms, mx)
+		startTime := time.Now()
 		if t == 0 {
 			CreateFile(ms, mx, u, c, p)
 		} else {
 			CreateFile2(ms, mx, u, c, p)
 		}
+		times := time.Since(startTime).Seconds()
+		fmt.Println(fmt.Sprintf("spend time %v s\n", times))
 	case COUNT_DIR:
 		count, err := CountOfDir(p, recursive)
 		if err != nil {
@@ -119,9 +137,102 @@ func main() {
 			panic("please type correct update file count")
 		}
 		RandomUpdateFilesOnDir(p, c, recursive)
+	case RANDOM_CREATE_FILE:
+		err := RandomCreateFile(ms, mx, u, c, p)
+		if err != nil {
+			panic(err)
+		}
+	case HASH:
+		hash, err := Hash(p, forceConsitency)
+		if err != nil {
+			panic(err)
+		}
+		val, err := binary.ReadUvarint(bytes.NewBuffer(hash))
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(val)
+	case COUNT_FILE:
+		count, err := CountOfFile(p, recursive)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(count)
 	default:
 		panic("not support")
 	}
+}
+
+// 如果path，计算文件hash,如果是目录，计算目录下的所有文件hash+hash(目录数量）
+
+func Hash(path string, forceConsitency bool) ([]byte, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	dirType := stat.IsDir()
+	if !dirType {
+		return FileHash(path)
+	}
+	files, dirs, err := filesOfDir(path, true)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	for _, file := range files {
+		fh, err := FileHash(file)
+		if err != nil {
+			return nil, err
+		}
+		_, err = h.Write(fh)
+		if err != nil && io.EOF != err {
+			return nil, err
+		}
+	}
+	// dir name
+	if forceConsitency {
+		for _, dir := range dirs {
+			_, err = h.Write([]byte(dir))
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+		}
+	}
+
+	return h.Sum(nil), nil
+}
+
+func FileHash(path string) ([]byte, error) {
+	if !IsFile(path) {
+		return nil, fmt.Errorf("not a file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
+
+// 在目录p下任意选择目录进行文件写入
+
+func RandomCreateFile(ms int, mx int, u int, c int, p string) error {
+
+	_, dirs, err := filesOfDir(p, true)
+	if err != nil {
+		return err
+	}
+	dirs = append(dirs, p)
+	dirSize := len(dirs)
+	for i := 0; i < c; i++ {
+
+		CreateFile(ms, mx, u, 1, dirs[random.RandomIntM(dirSize)])
+	}
+	return nil
 }
 
 //计算目录数目
@@ -132,6 +243,14 @@ func CountOfDir(dir string, recursive bool) (int, error) {
 		return 0, err
 	}
 	return len(dirs), nil
+}
+
+func CountOfFile(dir string, recursive bool) (int, error) {
+	files, _, err := filesOfDir(dir, recursive)
+	if err != nil {
+		return 0, err
+	}
+	return len(files), nil
 }
 
 // 返回该目录下的所有文件
@@ -150,7 +269,7 @@ func ListFile(dir string, recursive bool) ([]string, error) {
 	return files, err
 }
 
-// 目录下的所有文件任意修改
+// 目录下的所有文件任意修改, 可写的正常文件
 
 func RandomUpdateFilesOnDir(dir string, updateCount int, recursive bool) error {
 
@@ -166,7 +285,7 @@ func RandomUpdateFilesOnDir(dir string, updateCount int, recursive bool) error {
 	if updateCount > lens {
 		updateCount = lens
 	}
-	log.Println("update file count is ", updateCount)
+	log.Debug("update file count is ", updateCount)
 	idx := random.RandomIntM(lens)
 	for ; updateCount > 0; updateCount-- {
 		err = RandomUpdateFile(files[idx%lens])
@@ -189,6 +308,10 @@ func RandomUpdateFile(file string) error {
 	if err != nil {
 		return err
 	}
+	if !stat.Mode().IsRegular() {
+		log.Debugf("file {} is not a regular file. do not write data", file)
+		return nil
+	}
 	fileSize := stat.Size()
 	var seekPosition int64 = 0
 	if fileSize > 0 {
@@ -200,7 +323,7 @@ func RandomUpdateFile(file string) error {
 	}
 	// 随机写入1kb大小数据
 	writeDataSize := 1024 * 1
-	log.Printf("start write 1kb data to %s on seek %d \n", file, seekPosition)
+	log.Debugf("start write 1kb data to %s on seek %d \n", file, seekPosition)
 	dataStr := random.RandomStr(writeDataSize)
 	writer := bufio.NewWriter(filePoint)
 	writer.WriteString(dataStr)
@@ -250,6 +373,8 @@ func CreateDir(dir string, depthsCount []int, globalSeq bool) error {
 	return nil
 }
 
+// files and dirs
+
 func filesOfDir(dir string, recursive bool) ([]string, []string, error) {
 	if !strings.HasSuffix(dir, string(Separator)) {
 		dir = dir + string(Separator)
@@ -282,7 +407,6 @@ func CreateFile(ms int, mx int, u int, c int, p string) {
 	var wg sync.WaitGroup
 	t := c / GOT
 	tr := c % GOT
-	startTime := time.Now()
 	for idx := 0; idx < GOT; idx++ {
 		if t == 0 && tr == 0 {
 			break
@@ -296,8 +420,6 @@ func CreateFile(ms int, mx int, u int, c int, p string) {
 		go GeneratorFileBatch(count, &wg, p, ms, mx, u)
 	}
 	wg.Wait()
-	times := time.Since(startTime).Seconds()
-	fmt.Println(fmt.Sprintf("spend time %v s\n", times))
 }
 
 func CreateFile2(ms int, mx int, u int, c int, p string) {
@@ -360,6 +482,14 @@ func IsDir(dir string) bool {
 		return false
 	}
 	return f.IsDir()
+}
+
+func IsFile(path string) bool {
+	f, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !f.IsDir()
 }
 
 func DirExits(path string) (bool, error) {

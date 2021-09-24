@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -117,4 +119,62 @@ func TestMatht(t *testing.T) {
 		ans += int(math.Pow(float64(n), float64(i)))
 	}
 	fmt.Println(ans)
+}
+
+func TestRegularFile(t *testing.T) {
+	filePath := "D:\\my\\project\\self\\go-utils\\file\\a"
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stat.Mode().IsRegular() {
+		t.Fatal("not a regular file")
+	}
+}
+
+func TestRandomCreateFile(t *testing.T) {
+	path := "D:\\my\\test_agent"
+	err := RandomCreateFile(100, 100, 0, 1000, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFileHash(t *testing.T) {
+	f1 := "D:\\my\\project\\self\\go-utils\\file\\file.go"
+	hash1, err := FileHash(f1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := "D:\\my\\project\\self\\go-utils\\file\\file2"
+	hash2, err := FileHash(f2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(hash1, hash2) {
+		t.Fatalf("file1:%s content not equals file2:%s", f1, f2)
+	}
+}
+
+func TestHash(t *testing.T) {
+	f1 := "D:\\my\\project\\self\\go-utils\\file"
+	hash1, err := Hash(f1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s1, err := binary.ReadUvarint(bytes.NewBuffer(hash1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := "D:\\my\\project\\self\\go-utils\\file"
+	hash2, err := Hash(f2, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := binary.ReadUvarint(bytes.NewBuffer(hash2))
+	fmt.Println(s1 == s2)
+	if !bytes.Equal(hash1, hash2) {
+		t.Fatalf("file1:%s content not equals file2:%s", f1, f2)
+	}
 }
