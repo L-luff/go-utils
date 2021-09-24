@@ -50,7 +50,7 @@ const (
 	COUNT_FILE
 )
 
-var GOT int = runtime.NumCPU() * 4
+var GOT = runtime.NumCPU() * 4
 
 var typeMap = map[int]int{KB: small, MB: medium, GB: big}
 
@@ -88,7 +88,7 @@ func main() {
 	flag.StringVar(&p, "p", "", "file path")
 	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE ")
 	flag.BoolVar(&recursive, "r", false, "count of dir")
-	flag.StringVar(&depthsCountVar, "dc", "1", "file path")
+	flag.StringVar(&depthsCountVar, "dc", "1", "dir depths count")
 	flag.IntVar(&logLevel, "l", 1, "log level")
 	flag.BoolVar(&forceConsitency, "fc", false, "true: check dir name and file content consistency flase: just check file content")
 
