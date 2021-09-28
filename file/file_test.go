@@ -178,3 +178,14 @@ func TestHash(t *testing.T) {
 		t.Fatalf("file1:%s content not equals file2:%s", f1, f2)
 	}
 }
+
+func TestDelete(t *testing.T) {
+	path := "D:\\my\\test_agent\\filesync1"
+	num := 1
+	fc := true
+	err := Delete(path, num, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+}

@@ -12,6 +12,7 @@ import (
 	"go-utils/random"
 	"io"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -48,6 +49,7 @@ const (
 	RANDOM_CREATE_FILE
 	HASH
 	COUNT_FILE
+	DELETE_FILE
 )
 
 var GOT = runtime.NumCPU() * 4
@@ -65,6 +67,7 @@ func init() {
 // -o 4  -ms 100 -mx 200 -u kb -c 100 -p dirPath
 // -o 5 -p dirPath
 // -o 6 -p dirPath
+// -0 7 -p dirPath(or filePath) -c 100 -fc
 func main() {
 	var (
 		ms              int
@@ -86,11 +89,11 @@ func main() {
 	flag.IntVar(&c, "c", 1, "file count")
 	flag.IntVar(&t, "t", 0, "type")
 	flag.StringVar(&p, "p", "", "file path")
-	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE ")
-	flag.BoolVar(&recursive, "r", false, "count of dir")
+	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE 7: DELETE_FILE ")
+	flag.BoolVar(&recursive, "r", false, "recursive")
 	flag.StringVar(&depthsCountVar, "dc", "1", "dir depths count")
 	flag.IntVar(&logLevel, "l", 1, "log level")
-	flag.BoolVar(&forceConsitency, "fc", false, "true: check dir name and file content consistency flase: just check file content")
+	flag.BoolVar(&forceConsitency, "fc", false, "true: check dir name and file content consistency or delete dir  flase: just check file content")
 
 	flag.Parse()
 	if len([]rune(p)) == 0 {
@@ -108,7 +111,7 @@ func main() {
 			}
 			depthsCount = append(depthsCount, val)
 		}
-		fmt.Println("depths count val:", depthsCount)
+		log.Debug("depths count val:", depthsCount)
 		err := CreateDir(p, depthsCount, true)
 		if err != nil {
 			panic(err)
@@ -117,7 +120,7 @@ func main() {
 		if ms > mx {
 			panic("minSize greater than maxSize,please type correct size")
 		}
-		fmt.Printf("file path:%s,minSize %v,maxSize %v\n", p, ms, mx)
+		log.Debugf("file path:%s,minSize %v,maxSize %v\n", p, ms, mx)
 		startTime := time.Now()
 		if t == 0 {
 			CreateFile(ms, mx, u, c, p)
@@ -125,7 +128,7 @@ func main() {
 			CreateFile2(ms, mx, u, c, p)
 		}
 		times := time.Since(startTime).Seconds()
-		fmt.Println(fmt.Sprintf("spend time %v s\n", times))
+		fmt.Println(times)
 	case COUNT_DIR:
 		count, err := CountOfDir(p, recursive)
 		if err != nil {
@@ -158,9 +161,54 @@ func main() {
 			panic(err)
 		}
 		fmt.Println(count)
+	case DELETE_FILE:
+		startTime := time.Now()
+		err := Delete(p, c, forceConsitency)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(time.Since(startTime).Seconds())
 	default:
 		panic("not support")
 	}
+}
+
+func Delete(path string, num int, forces bool) error {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	dirType := stat.IsDir()
+	if !dirType {
+		//delete file
+		return DeleteFile(path)
+	}
+	if forces {
+		return os.Remove(path)
+	}
+	// random delete files
+	files, err := ListFile(path, true)
+	if err != nil {
+		return err
+	}
+	size := len(files)
+	num = int(math.Min(float64(num), float64(size)))
+	idx := random.RandomIntM(size)
+	for ; num > 0; num-- {
+		err := DeleteFile(files[idx%size])
+		if err != nil {
+			log.Debugf("delete file %s error %v", files[idx%size], err)
+		}
+		idx = (idx + 1) % size
+	}
+	return nil
+}
+
+func DeleteFile(file string) error {
+	if !IsFile(file) {
+		return fmt.Errorf("not a file %s", file)
+	}
+	return os.Remove(file)
 }
 
 // 如果path，计算文件hash,如果是目录，计算目录下的所有文件hash+hash(目录数量）
@@ -368,8 +416,8 @@ func CreateDir(dir string, depthsCount []int, globalSeq bool) error {
 		}
 	}
 
-	fmt.Printf("create dir success,last suffixNumber is %d \n", suffixNumber-1)
-	fmt.Println(fmt.Sprintf("spend time %v s\n", time.Since(startTime).Seconds()))
+	log.Debugf("create dir success,last suffixNumber is %d \n", suffixNumber-1)
+	fmt.Println(time.Since(startTime).Seconds())
 	return nil
 }
 
