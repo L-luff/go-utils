@@ -8,6 +8,7 @@ import (
 	log "github.com/L-luff/go-utils/log"
 	"github.com/L-luff/go-utils/random"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"math"
 	"math/rand"
@@ -55,6 +56,16 @@ var typeMap = map[int]int{KB: small, MB: medium, GB: big}
 
 func init() {
 	rand.Seed(time.Now().Unix())
+}
+
+type Info struct {
+	path string
+	size uint64
+}
+
+type Diff struct {
+	OriginInfo *Info
+	DstInfo    *Info
 }
 
 func Delete(path string, num int, forces bool) error {
@@ -465,6 +476,103 @@ func writeFileDataGB(file *os.File, minSize int, maxSize int) {
 	size := random.RandomIntMN(minSize, maxSize)
 	size = size * 1024 * 1024
 	writeKB(file, size)
+}
+
+func CheckConsistency(oringPrefixDir string, destPrefixDir string,
+	onceDiffAbort bool, storge bool,
+	infoPath string, suffixFilters []string) (error, []*Diff) {
+
+	if exists, _ := DirExits(oringPrefixDir); !exists {
+		return fmt.Errorf("originDir %s not exists", oringPrefixDir), nil
+	}
+
+	if exists, _ := DirExits(destPrefixDir); !exists {
+		return fmt.Errorf("DestDirt %s not exists", destPrefixDir), nil
+	}
+	var infoPrint InfoPrint
+	if storge && len(infoPath) > 0 {
+		infoPrint = NewFileInfoPrint(infoPath)
+	} else {
+		infoPrint = NewStdInfoPrint()
+	}
+	suffixFiltersMap := make(map[string]bool, len(suffixFilters))
+	for _, suffixFilter := range suffixFilters {
+		suffixFiltersMap[suffixFilter] = true
+	}
+	return checkDataConsistency(oringPrefixDir, destPrefixDir, onceDiffAbort, infoPrint, suffixFiltersMap)
+}
+
+func checkDataConsistency(originPrefixDir string, destPrefixDir string, onceDiffAbort bool,
+	infoPrint InfoPrint, suffixFiltersMap map[string]bool) (error, []*Diff) {
+	if !strings.HasSuffix(originPrefixDir, string(Separator)) {
+		originPrefixDir += string(Separator)
+	}
+	if !strings.HasSuffix(destPrefixDir, string(Separator)) {
+		destPrefixDir += string(Separator)
+	}
+	//originInfos, err := ioutil.ReadDir(oringPrefixDir)
+	//if err != nil {
+	//	return fmt.Errorf("list sub dir=%s error,%v",oringPrefixDir,err),nil
+	//}
+	//destInfos, err := ioutil.ReadDir(destPrefixDir)
+	//if err != nil {
+	//	return fmt.Errorf("list sub dir=%s error,%v",destPrefixDir,err),nil
+	//}
+	originDeque := list.New()
+	destDeuqe := list.New()
+	originDeque.PushBack(originPrefixDir)
+	destDeuqe.PushBack(destPrefixDir)
+	for originDeque.Len() > 0 {
+		op := originDeque.Remove(originDeque.Front())
+		dp := destDeuqe.Remove(destDeuqe.Front())
+		checkFun := func(op, dp string, ol, dl *list.List) error {
+			return nil
+		}
+		if err := checkFun(op.(string), dp.(string), originDeque, destDeuqe); err == nil {
+
+		}
+
+	}
+}
+
+type InfoPrint interface {
+	Print(content string)
+}
+
+type FileInfoPrint struct {
+	path   string
+	writer *bufio.Writer
+}
+
+type StdInfoPrint struct {
+}
+
+func NewStdInfoPrint() *StdInfoPrint {
+	return &StdInfoPrint{}
+}
+
+func NewFileInfoPrint(path string) *FileInfoPrint {
+	_, err := os.Stat(path)
+	var writer *bufio.Writer
+	if err != nil && os.IsNotExist(err) {
+		//create file
+		f, err := os.Create(path)
+		if err != nil {
+			log.Errorf("Create file %s error %v", path, err)
+		}
+		writer = bufio.NewWriter(f)
+	}
+
+	return &FileInfoPrint{path: path, writer: writer}
+}
+
+func (*StdInfoPrint) Print(content string) {
+	fmt.Println(content)
+}
+func (fp *FileInfoPrint) Print(content string) {
+	// ignore error
+	fp.writer.WriteString(content)
+	fp.writer.Flush()
 }
 
 //
