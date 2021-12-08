@@ -187,5 +187,68 @@ func TestDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
 
+//func TestCheck(t *testing.T)  {
+//	op := "D:\\my\\test_agent\\filesync1"
+//	dp := "D:\\my\\test_agent\\filesync2"
+//	infoPrint := NewStdInfoPrint()
+//	Check(op,dp,false,infoPrint,make(map[string]bool))
+//}
+//
+//func TestCheckFilter(t *testing.T)  {
+//	op := "D:\\my\\test_agent\\filesync1"
+//	dp := "D:\\my\\test_agent\\filesync2"
+//	infoPrint := NewStdInfoPrint()
+//	filter := map[string]bool{
+//		"file1":true,
+//		"file2":true,
+//	}
+//	Check(op,dp,false,infoPrint,filter)
+//}
+
+func TestCheckConsistency(t *testing.T) {
+	op := "D:\\my\\test_agent\\filesync1"
+	dp := "D:\\my\\test_agent\\filesync2"
+	CheckConsistency(op, dp, false, false, "", nil)
+}
+
+// 只要有一个groutine有painc 全局停止
+func TestPainc(t *testing.T) {
+
+	testf := func(times int) {
+		time.Sleep(time.Second * time.Duration(times))
+		panic("sleep error----")
+	}
+
+	for _, val := range []int{10, 2000, 30000} {
+		fmt.Println(val)
+		go testf(val)
+	}
+
+	time.Sleep(time.Hour)
+	fmt.Println("sleep end-----")
+}
+
+func TestLoop(t *testing.T) {
+	arr := []int{1, 2, 3}
+	newArr := []*int{}
+	for i, _ := range arr {
+		newArr = append(newArr, &arr[i])
+	}
+	for _, v := range newArr {
+		fmt.Println(*v)
+	}
+}
+
+// @see https://draveness.me/golang/docs/part2-foundation/ch05-keyword/golang-for-range/
+func TestLoop2(t *testing.T) {
+	arr := []int{1, 2, 3}
+	newArr := []*int{}
+	for _, v := range arr {
+		newArr = append(newArr, &v)
+	}
+	for _, v := range newArr {
+		fmt.Println(*v)
+	}
 }

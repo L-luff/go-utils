@@ -2,6 +2,7 @@ package file
 
 import (
 	"bufio"
+	"bytes"
 	"container/list"
 	"crypto/sha256"
 	"fmt"
@@ -48,6 +49,7 @@ const (
 	HASH
 	COUNT_FILE
 	DELETE_FILE
+	CHECK_DIFF
 )
 
 var GOT = runtime.NumCPU() * 4
@@ -480,14 +482,14 @@ func writeFileDataGB(file *os.File, minSize int, maxSize int) {
 
 func CheckConsistency(oringPrefixDir string, destPrefixDir string,
 	onceDiffAbort bool, storge bool,
-	infoPath string, suffixFilters []string) (error, []*Diff) {
+	infoPath string, suffixFilters []string) error {
 
 	if exists, _ := DirExits(oringPrefixDir); !exists {
-		return fmt.Errorf("originDir %s not exists", oringPrefixDir), nil
+		return fmt.Errorf("originDir %s not exists", oringPrefixDir)
 	}
 
 	if exists, _ := DirExits(destPrefixDir); !exists {
-		return fmt.Errorf("DestDirt %s not exists", destPrefixDir), nil
+		return fmt.Errorf("DestDirt %s not exists", destPrefixDir)
 	}
 	var infoPrint InfoPrint
 	if storge && len(infoPath) > 0 {
@@ -503,36 +505,128 @@ func CheckConsistency(oringPrefixDir string, destPrefixDir string,
 }
 
 func checkDataConsistency(originPrefixDir string, destPrefixDir string, onceDiffAbort bool,
-	infoPrint InfoPrint, suffixFiltersMap map[string]bool) (error, []*Diff) {
-	if !strings.HasSuffix(originPrefixDir, string(Separator)) {
-		originPrefixDir += string(Separator)
-	}
-	if !strings.HasSuffix(destPrefixDir, string(Separator)) {
-		destPrefixDir += string(Separator)
-	}
-	//originInfos, err := ioutil.ReadDir(oringPrefixDir)
-	//if err != nil {
-	//	return fmt.Errorf("list sub dir=%s error,%v",oringPrefixDir,err),nil
-	//}
-	//destInfos, err := ioutil.ReadDir(destPrefixDir)
-	//if err != nil {
-	//	return fmt.Errorf("list sub dir=%s error,%v",destPrefixDir,err),nil
-	//}
-	originDeque := list.New()
-	destDeuqe := list.New()
-	originDeque.PushBack(originPrefixDir)
-	destDeuqe.PushBack(destPrefixDir)
-	for originDeque.Len() > 0 {
-		op := originDeque.Remove(originDeque.Front())
-		dp := destDeuqe.Remove(destDeuqe.Front())
-		checkFun := func(op, dp string, ol, dl *list.List) error {
-			return nil
-		}
-		if err := checkFun(op.(string), dp.(string), originDeque, destDeuqe); err == nil {
+	infoPrint InfoPrint, suffixFiltersMap map[string]bool) error {
+	opa := make([]string, 0, 1)
+	dpa := make([]string, 0, 1)
+	opa = append(opa, originPrefixDir)
+	dpa = append(dpa, destPrefixDir)
 
+	arrayPathCheck := func(oa, da []string, wg *sync.WaitGroup) (nopa []string, ndpa []string) {
+		nopa = make([]string, 0, len(oa)*10)
+		ndpa = make([]string, 0, len(oa)*10)
+		for idx, op := range oa {
+			o, d := check(op, da[idx], onceDiffAbort, infoPrint, suffixFiltersMap)
+			nopa = append(nopa, o...)
+			ndpa = append(ndpa, d...)
+			o = o[0:0]
+			d = d[0:0]
+		}
+		if wg != nil {
+			wg.Done()
+		}
+		return nopa, ndpa
+	}
+	for len(opa) > 0 {
+		o, d := arrayPathCheck(opa, dpa, nil)
+		opa = o
+		dpa = d
+	}
+
+	return nil
+}
+
+func check(originPath, destPath string, onceDiffAbort bool, infoPrint InfoPrint, suffixFilterMap map[string]bool) (opc []string, dpc []string) {
+	if !strings.HasSuffix(originPath, string(Separator)) {
+		originPath += string(Separator)
+	}
+	if !strings.HasSuffix(destPath, string(Separator)) {
+		destPath += string(Separator)
+	}
+	originInfos, err := ioutil.ReadDir(originPath)
+	if err != nil {
+		panic(fmt.Errorf("ReadDir %s error %v", originPath, err))
+	}
+	destInfos, err := ioutil.ReadDir(destPath)
+	if err != nil {
+		panic(fmt.Errorf("ReadDir %s error %v", destPath, err))
+	}
+	originMap := make(map[string]fs.FileInfo, len(originInfos))
+	for _, oi := range originInfos {
+		originMap[oi.Name()] = oi
+	}
+	opc = make([]string, 0, len(originInfos))
+	dpc = make([]string, 0, len(originInfos))
+	for _, di := range destInfos {
+		var oi fs.FileInfo
+		var ok bool
+		if _, ok = suffixFilterMap[di.Name()]; ok {
+			delete(originMap, di.Name())
+			continue
+		}
+		if oi, ok = originMap[di.Name()]; !ok {
+			infoPrint.Print(fmt.Sprintf("目标文件存在：%s,但是源文件不存在", destPath+di.Name()))
+			if onceDiffAbort {
+				panic("")
+			} else {
+				continue
+			}
+		}
+		op := originPath + oi.Name()
+		dp := destPath + oi.Name()
+		if oi.Mode().Type() != di.Mode().Type() {
+			infoPrint.Print(fmt.Sprintf("原文件：%s 与 目标文件：%s,类型不同，原文件类型：%d 目标文件类型：%d",
+				op, dp, oi.Mode().Type(), di.Mode().Type()))
+			if onceDiffAbort {
+				panic("")
+			}
+			delete(originMap, op)
+			continue
 		}
 
+		if di.IsDir() {
+			opc = append(opc, op)
+			dpc = append(dpc, dp)
+		} else if di.Mode().IsRegular() {
+			//HASH CHECK
+			var diff bool
+			if oi.Size() != di.Size() {
+				diff = true
+			}
+			if !diff {
+				oHash, err := FileHash(op)
+				if err != nil {
+					panic(fmt.Sprintf("FileHash:%s error %v", op, err))
+				}
+				dHash, err := FileHash(dp)
+				if err != nil {
+					panic(fmt.Sprintf("FIleHash:%s error %v", dp, err))
+				}
+				diff = !bytes.Equal(oHash, dHash)
+			}
+			if diff {
+				infoPrint.Print(fmt.Sprintf("原文件：%s 与 目标文件：%s 内容不同", op, dp))
+				if onceDiffAbort {
+					panic("")
+				}
+			}
+		} else {
+			//ignore
+		}
+		// delete originMap element
+		delete(originMap, di.Name())
 	}
+	// check originMap length
+	for k, _ := range originMap {
+		if _, ok := suffixFilterMap[k]; ok {
+			delete(originMap, k)
+		} else {
+			infoPrint.Print(fmt.Sprintf("源文件：%s 存在，但是目标文件不存在", originPath+k))
+		}
+	}
+	if onceDiffAbort && len(originMap) > 0 {
+		panic("")
+	}
+	return opc, dpc
 }
 
 type InfoPrint interface {
@@ -558,7 +652,7 @@ func NewFileInfoPrint(path string) *FileInfoPrint {
 		//create file
 		f, err := os.Create(path)
 		if err != nil {
-			log.Errorf("Create file %s error %v", path, err)
+			panic(fmt.Errorf("create file %s error %v", path, err))
 		}
 		writer = bufio.NewWriter(f)
 	}
@@ -571,7 +665,7 @@ func (*StdInfoPrint) Print(content string) {
 }
 func (fp *FileInfoPrint) Print(content string) {
 	// ignore error
-	fp.writer.WriteString(content)
+	fp.writer.WriteString(fmt.Sprintln(content))
 	fp.writer.Flush()
 }
 

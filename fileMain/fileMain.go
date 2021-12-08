@@ -31,8 +31,14 @@ func main() {
 		o               int // 操作类型
 		recursive       bool
 		depthsCountVar  string
-		logLevel        int  //  是否debug
-		forceConsitency bool // 完全一致性，会检查目录
+		logLevel        int    //  是否debug
+		forceConsitency bool   // 完全一致性，会检查目录
+		op              string //  源目录
+		dp              string // 目标目录
+		diffAbort       bool   //  有不相等的内容是否直接推出
+		storage         bool   //错误信息是否保存
+		sp              string // 错误信息保存路径
+		filters         string //过滤内容
 	)
 
 	flag.IntVar(&ms, "ms", 1, "file min size")
@@ -41,14 +47,20 @@ func main() {
 	flag.IntVar(&c, "c", 1, "file count")
 	flag.IntVar(&t, "t", 0, "type")
 	flag.StringVar(&p, "p", "", "file path")
-	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE 7: DELETE_FILE ")
+	flag.IntVar(&o, "o", 1, "operation type, 0: CREATE_DIR,1:CREATE_FILE 2:COUNT_DIR 3: LIST_FILE,4:RANDOM_CREATE_FILE 5:HASH 6:COUNT_FILE 7: DELETE_FILE 8: CHECK_FILE ")
 	flag.BoolVar(&recursive, "r", false, "recursive")
 	flag.StringVar(&depthsCountVar, "dc", "1", "dir depths count")
 	flag.IntVar(&logLevel, "l", 1, "log level")
 	flag.BoolVar(&forceConsitency, "fc", false, "true: check dir name and file content consistency or delete dir  flase: just check file content")
+	flag.StringVar(&op, "op", "", "origin path")
+	flag.StringVar(&dp, "dp", "", "dest path")
+	flag.StringVar(&filters, "filter", "", "filter content, Use comma to separate")
+	flag.BoolVar(&storage, "storage", false, "Determine whether the output information needs to be saved，default:false")
+	flag.StringVar(&sp, "sp", "", "storage path")
+	flag.BoolVar(&diffAbort, "da", true, "Whether there are unequal content directly launched. default true")
 
 	flag.Parse()
-	if len([]rune(p)) == 0 {
+	if len([]rune(p)) == 0 && o != file.CHECK_DIFF {
 		panic("please type  path")
 	}
 	log.SetLevel(logLevel)
@@ -120,6 +132,25 @@ func main() {
 			panic(err)
 		}
 		fmt.Println(time.Since(startTime).Seconds())
+	case file.CHECK_DIFF:
+		if len(op) == 0 || len(dp) == 0 {
+			panic("Directory cannot be empty")
+		}
+		if storage {
+			if len(sp) == 0 {
+				panic("Error message  path cannot be empty")
+			}
+		}
+		var fa []string
+		if len(filters) != 0 {
+			fa = strings.Split(filters, ",")
+		}
+		startTime := time.Now()
+		err := file.CheckConsistency(op, dp, diffAbort, storage, sp, fa)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("spendTime : %f s \n", time.Since(startTime).Seconds())
 	default:
 		panic("not support")
 	}
